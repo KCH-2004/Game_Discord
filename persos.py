@@ -1,5 +1,7 @@
+from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass
+import copy
 
 
 class NiveauConfiance(Enum):
@@ -28,10 +30,23 @@ class NiveauConfiance(Enum):
         else:
             return NiveauConfiance.NULLE
 
+    def trahison(self):
+        return NiveauConfiance.NULLE
+
 @dataclass
 class Personnalite:
     trait: str
     multiplicateur_trahison: float
+
+@dataclass
+class Ressource:
+    vie:int
+    mana:int
+
+    def __iadd__(self, ressource:Ressource):
+        self.vie += ressource.vie
+        self.mana += ressource.mana
+        return self
 
 @dataclass
 class Stats:
@@ -40,51 +55,101 @@ class Stats:
     defense: int
     mdefense: int
     vitesse: int
-    mana: int
-    vie: int
 
-    def __iadd__(self, otherstats):
-        if not isinstance(otherstats, Stats):
-            raise TypeError("Type de Otherstats invalide\n"
-                            "class: Stats")
-
+    def __iadd__(self, otherstats:Stats):
         self.attaque += otherstats.attaque
         self.magie += otherstats.magie
         self.defense += otherstats.defense
         self.mdefense += otherstats.mdefense
         self.vitesse += otherstats.vitesse
-        self.mana += otherstats.mana
-        self.vie += otherstats.vie
-
         return self
 
 @dataclass
 class Classe:
     stats: Stats
+    ressourcesmax: Ressource
     nom: str
+
+@dataclass
+class NobleFantasm:
+    nom:str
+    proprietaire:Servant
+
 
 @dataclass
 class Participants:
     nom: str
     stats: Stats
-    sceauxrestant: int
+    ressourcesmax: Ressource
+    ressourcesactuel: Ressource
     encombat: bool
     statut:str
+    def mourir(self):
+        self.ressourcesactuel.vie = 0
+        self.statut = "Mort"
+        self.encombat = False
+
+    def consommermana(self,montant:int):
+        if self.ressourcesactuel.mana >= montant:
+            self.ressourcesactuel.mana -= montant
+        else:
+            raise ArithmeticError("Le mana actuel est insuffisant")
+
+    def initressources(self):
+        self.ressourcesactuel = copy.copy(self.ressourcesmax)
 
 @dataclass
 class Master(Participants):
-    nomservant: str
+    sceauxrestant: int
+    servant:Servant = None
+
+    def mourir(self):
+        super().mourir()
+        self.servant.master = None
+        self.servant.statut = "En train de disparaitre"
+        if self.servant.classe.nom == "Archer":
+            self.servant.touravantdisparition = 4
+        else:
+            self.servant.touravantdisparition = 2
+
+    def lierservant(self,servant:Servant):
+        servant.master = self
+        self.servant = servant
+        self.sceauxrestant = 3
+        self.servant.confiance = NiveauConfiance.MOYENNE
+        self.servant.statut = "Vie"
+
 
 @dataclass
 class Servant(Participants):
     classe:Classe
-    nommaster:str
     personnalite:Personnalite
     confiance:NiveauConfiance
-    noblefantasm:str
+    noblefantasm:NobleFantasm
+    sexe:str
+    master: Master = None
+    touravantdisparition:int = None
 
-    def setfinalstats(self):
+    def initfinalstats(self):
         self.stats += self.classe.stats
+        self.ressourcesmax += self.classe.ressourcesmax
+        self.initressources()
+
+    def mourir(self):
+        super().mourir()
+        self.master.servant = None
+
+    def consommermana(self,montant:int):
+        if self.master is not None and self.master.ressourcesactuel.mana >= montant:
+            self.master.ressourcesactuel.mana -= montant
+            return "Le mana du master a été consommé"
+        elif self.master is not None and self.master.ressourcesactuel.mana < montant:
+            return "impossible d'attaquer: le mana du master est insuffisant"
+        elif self.ressourcesactuel.mana >= montant:
+            self.ressourcesactuel.mana -= montant
+            return "Le mana du servant a été consommé"
+        else:
+            return "Le mana actuel est insuffisant"
 
 class Carte:
 
@@ -130,13 +195,20 @@ class Action:
 
 class Attaque(Action):
     def __init__(self,initiateur:Participants,cible:Participants):
-        pass
+        super().__init__(initiateur)
+        self.cible = cible
+
+
+class AttaquePhysique(Attaque):
+    pass
+
+class AttaqueMagique(Attaque):
+    pass
+
+class AttaqueNobleFantasm(Attaque):
+    pass
 
 class Scout(Action):
-    def __init__(self,initiateur:Participants):
-        pass
-
-class Ultime(Action):
     def __init__(self,initiateur:Participants):
         pass
 
@@ -148,24 +220,20 @@ class Retraite(Action):
     def __init__(self,initiateur:Participants):
         pass
 
-class OrdreAbsolue(Action):
-    def __init__(self,initiateur:Master,cible:Servant,ordre:str):
+class Suicide(Action):
+    def __init__(self,initiateur:Master,cible:Servant):
         super().__init__(initiateur)
         self.cible = cible
-        self.ordre = ordre
 
     def executer(self,carte:Carte):
         if self.initiateur.sceauxrestant <= 0:
-            return False
-
-        self.initiateur.sceauxrestant -= 1
-        self.cible.confiance = self.cible.confiance.baisserConfiance()
-        return True
-
-class Suicide(OrdreAbsolue):
-    def __init__(self,initiateur:Master,cible:Servant):
-        super().__init__(initiateur,cible)
-
-
-    def executer(self, carte:Carte):
-        pass
+            self.cible.confiance = self.cible.confiance.trahison()
+            return ("L'ordre a échoué, vous n'avez plus de sceaux.\n"
+                    "Ayant trahi votre servant ce dernier ne vous fait plus confiance")
+        else:
+            self.initiateur.sceauxrestant -= 1
+            self.cible.mourir()
+            if self.cible.sexe == "H":
+                return f"Par la puissance absolue du sceau:{self.cible.nom} s'est suicidé"
+            else:
+                return f"Par la puissance absolue du sceau:{self.cible.nom} s'est suicidée"
